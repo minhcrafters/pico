@@ -31,7 +31,7 @@ impl Memory {
     pub fn load(&mut self, start_addr: u16, data: &[u8]) {
         let start = start_addr as usize;
         let end = start + data.len();
-        self.data[start..end].copy_from_slice(&data[..]);
+        self.data[start..end].copy_from_slice(data);
     }
 
     pub fn clear(&mut self) {
