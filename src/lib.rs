@@ -10,5 +10,6 @@ pub mod palette;
 pub mod ppu;
 pub mod render;
 pub mod trace;
+pub mod movie;
 
 extern crate bitflags;

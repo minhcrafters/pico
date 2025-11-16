@@ -135,7 +135,11 @@ impl<M: Memory> CPU<M> {
 
             // Check for IRQ (maskable interrupt) if not disabled
             if let Some(_irq) = self.memory.poll_irq_status() {
-                if !self.registers.status.contains(StatusFlags::INTERRUPT_DISABLE) {
+                if !self
+                    .registers
+                    .status
+                    .contains(StatusFlags::INTERRUPT_DISABLE)
+                {
                     self.interrupt(interrupt::IRQ);
                 }
             }
@@ -378,20 +382,14 @@ impl<M: Memory> CPU<M> {
                 0
             };
 
-        if sum > 0xFF {
-            self.registers.status.insert(StatusFlags::CARRY); // Set carry flag
-        } else {
-            self.registers.status.remove(StatusFlags::CARRY); // Clear carry flag
-        }
+        self.registers.status.set(StatusFlags::CARRY, sum > 0xFF);
 
         let result = sum as u8;
 
-        // Set overflow flag
-        if ((self.registers.a ^ result) & (value ^ result) & 0x80) != 0 {
-            self.registers.status.insert(StatusFlags::OVERFLOW); // Set overflow flag
-        } else {
-            self.registers.status.remove(StatusFlags::OVERFLOW); // Clear overflow flag
-        }
+        self.registers.status.set(
+            StatusFlags::OVERFLOW,
+            ((self.registers.a ^ result) & (value ^ result) & 0x80) != 0,
+        );
 
         self.registers.a = result;
         self.update_zero_and_negative_flags(self.registers.a);
@@ -412,11 +410,9 @@ impl<M: Memory> CPU<M> {
         if *mode == AddressingMode::Accumulator {
             let mut value = self.registers.a;
 
-            if value & 0b1000_0000 != 0 {
-                self.registers.status.insert(StatusFlags::CARRY); // Set carry flag
-            } else {
-                self.registers.status.remove(StatusFlags::CARRY); // Clear carry flag
-            }
+            self.registers
+                .status
+                .set(StatusFlags::CARRY, value & 0b1000_0000 != 0);
 
             value <<= 1;
             self.registers.a = value;
@@ -427,11 +423,9 @@ impl<M: Memory> CPU<M> {
         let (addr, _) = self.get_operand_address(mode);
         let mut value = self.memory.read(addr);
 
-        if value & 0b1000_0000 != 0 {
-            self.registers.status.insert(StatusFlags::CARRY); // Set carry flag
-        } else {
-            self.registers.status.remove(StatusFlags::CARRY); // Clear carry flag
-        }
+        self.registers
+            .status
+            .set(StatusFlags::CARRY, value & 0b1000_0000 != 0);
 
         value <<= 1;
         self.memory.write(addr, value);

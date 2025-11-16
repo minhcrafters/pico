@@ -8,6 +8,14 @@ use registers::status::StatusRegister;
 
 pub mod registers;
 
+#[derive(Clone, Debug)]
+pub struct ScrollSegment {
+    pub start_scanline: usize,
+    pub scroll_x: usize,
+    pub scroll_y: usize,
+    pub base_nametable: usize,
+}
+
 pub struct PPU<'a> {
     pub mapper: &'a mut dyn Mapper,
     pub ctrl: ControlRegister,
@@ -27,6 +35,8 @@ pub struct PPU<'a> {
     cycles: usize,
 
     internal_data_buf: u8,
+    scroll_segments: Vec<ScrollSegment>,
+    pending_scroll_descriptor: Option<(usize, usize, usize)>,
 }
 
 impl<'a> PPU<'a> {
@@ -35,7 +45,7 @@ impl<'a> PPU<'a> {
     }
 
     pub fn new(mapper: &'a mut dyn Mapper) -> Self {
-        PPU {
+        let mut ppu = PPU {
             mapper,
             ctrl: ControlRegister::new(),
             mask: MaskRegister::new(),
@@ -50,7 +60,12 @@ impl<'a> PPU<'a> {
             scanline: 0,
             cycles: 0,
             internal_data_buf: 0,
-        }
+            scroll_segments: Vec::new(),
+            pending_scroll_descriptor: None,
+        };
+
+        ppu.reset_scroll_segments_for_new_frame();
+        ppu
     }
 
     // Horizontal:
@@ -64,17 +79,93 @@ impl<'a> PPU<'a> {
         let mirrored_vram = addr & 0b10111111111111; // mirror down 0x3000-0x3eff to 0x2000 - 0x2eff
         let vram_index = mirrored_vram - 0x2000; // to vram vector
         let name_table = vram_index / 0x400;
-        match (&self.mapper.mirroring(), name_table) {
+        let mirroring = self.mapper.mirroring();
+        match (mirroring, name_table) {
             (Mirroring::Vertical, 2) | (Mirroring::Vertical, 3) => vram_index - 0x800,
             (Mirroring::Horizontal, 2) => vram_index - 0x400,
             (Mirroring::Horizontal, 1) => vram_index - 0x400,
             (Mirroring::Horizontal, 3) => vram_index - 0x800,
+            (Mirroring::SingleScreenLower, _) => vram_index & 0x03FF,
+            (Mirroring::SingleScreenUpper, _) => (vram_index & 0x03FF) + 0x400,
             _ => vram_index,
         }
     }
 
     fn increment_vram_addr(&mut self) {
         self.addr.increment(self.ctrl.vram_addr_increment());
+    }
+
+    pub fn scroll_segments(&self) -> &[ScrollSegment] {
+        &self.scroll_segments
+    }
+
+    fn current_scroll_descriptor(&self) -> (usize, usize, usize) {
+        let scroll_x =
+            ((self.scroll.coarse_x as usize & 0x1F) * 8 + self.scroll.fine_x as usize) % 256;
+        let scroll_y =
+            (((self.scroll.coarse_y as usize) % 30) * 8 + self.scroll.fine_y as usize) % 240;
+        let base_nametable = ((self.ctrl.nametable_addr() - 0x2000) / 0x400) as usize;
+        (scroll_x, scroll_y, base_nametable)
+    }
+
+    fn visible_scanline(&self) -> Option<usize> {
+        if (self.scanline as usize) < 240 {
+            Some(self.scanline as usize)
+        } else {
+            None
+        }
+    }
+
+    fn push_scroll_segment(&mut self, descriptor: (usize, usize, usize), scanline: usize) {
+        let (scroll_x, scroll_y, base_nametable) = descriptor;
+        if let Some(last) = self.scroll_segments.last_mut() {
+            if last.start_scanline == scanline {
+                *last = ScrollSegment {
+                    start_scanline: scanline,
+                    scroll_x,
+                    scroll_y,
+                    base_nametable,
+                };
+                return;
+            }
+
+            if last.scroll_x == scroll_x
+                && last.scroll_y == scroll_y
+                && last.base_nametable == base_nametable
+            {
+                return;
+            }
+        }
+
+        self.scroll_segments.push(ScrollSegment {
+            start_scanline: scanline,
+            scroll_x,
+            scroll_y,
+            base_nametable,
+        });
+    }
+
+    fn queue_scroll_state_change(&mut self) {
+        let descriptor = self.current_scroll_descriptor();
+        if let Some(scanline) = self.visible_scanline() {
+            self.push_scroll_segment(descriptor, scanline.min(239));
+        } else {
+            self.pending_scroll_descriptor = Some(descriptor);
+        }
+    }
+
+    fn reset_scroll_segments_for_new_frame(&mut self) {
+        let descriptor = self
+            .pending_scroll_descriptor
+            .take()
+            .unwrap_or_else(|| self.current_scroll_descriptor());
+        self.scroll_segments.clear();
+        self.scroll_segments.push(ScrollSegment {
+            start_scanline: 0,
+            scroll_x: descriptor.0,
+            scroll_y: descriptor.1,
+            base_nametable: descriptor.2,
+        });
     }
 }
 
@@ -85,6 +176,7 @@ impl<'a> PPU<'a> {
         if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
             self.nmi_interrupt = Some(1);
         }
+        self.queue_scroll_state_change();
     }
 
     pub fn write_to_mask(&mut self, value: u8) {
@@ -113,7 +205,10 @@ impl<'a> PPU<'a> {
     }
 
     pub fn write_to_scroll(&mut self, value: u8) {
-        self.scroll.write(value);
+        let completed_sequence = self.scroll.write(value);
+        if completed_sequence {
+            self.queue_scroll_state_change();
+        }
     }
 
     pub fn write_to_ppu_addr(&mut self, value: u8) {
@@ -201,6 +296,7 @@ impl<'a> PPU<'a> {
                 self.nmi_interrupt = None;
                 self.status.set_sprite_zero_hit(false);
                 self.status.reset_vblank_status();
+                self.reset_scroll_segments_for_new_frame();
                 return true;
             }
         }
@@ -343,6 +439,64 @@ pub mod test {
 
         ppu.read_data(); //load into buffer
         assert_eq!(ppu.read_data(), 0x77); //read from B
+    }
+
+    #[test]
+    fn test_vram_single_screen_lower_mirror() {
+        let mut mapper = NromMapper::new(vec![], vec![0; 2048], Mirroring::SingleScreenLower);
+        let ppu = PPU::empty(&mut mapper);
+
+        assert_eq!(ppu.mirror_vram_addr(0x2000), 0);
+        assert_eq!(ppu.mirror_vram_addr(0x23ff), 0x03ff);
+        assert_eq!(ppu.mirror_vram_addr(0x2400), 0);
+        assert_eq!(ppu.mirror_vram_addr(0x27ff), 0x03ff);
+        assert_eq!(ppu.mirror_vram_addr(0x2c00), 0);
+        assert_eq!(ppu.mirror_vram_addr(0x2fff), 0x03ff);
+    }
+
+    #[test]
+    fn test_vram_single_screen_upper_mirror() {
+        let mut mapper = NromMapper::new(vec![], vec![0; 2048], Mirroring::SingleScreenUpper);
+        let ppu = PPU::empty(&mut mapper);
+
+        assert_eq!(ppu.mirror_vram_addr(0x2000), 0x0400);
+        assert_eq!(ppu.mirror_vram_addr(0x23ff), 0x07ff);
+        assert_eq!(ppu.mirror_vram_addr(0x2400), 0x0400);
+        assert_eq!(ppu.mirror_vram_addr(0x27ff), 0x07ff);
+        assert_eq!(ppu.mirror_vram_addr(0x2c00), 0x0400);
+        assert_eq!(ppu.mirror_vram_addr(0x2fff), 0x07ff);
+    }
+
+    #[test]
+    fn test_scroll_segments_capture_mid_frame_changes() {
+        let mut mapper = NromMapper::new(vec![], vec![0; 2048], Mirroring::Horizontal);
+        let mut ppu = PPU::empty(&mut mapper);
+
+        assert_eq!(ppu.scroll_segments().len(), 1);
+        ppu.scanline = 100;
+        ppu.write_to_scroll(0x14); // coarse X = 0x02 -> scroll_x = 16
+        ppu.write_to_scroll(0x08); // coarse Y = 1 -> scroll_y = 8
+
+        assert_eq!(ppu.scroll_segments().len(), 2);
+        let segment = &ppu.scroll_segments()[1];
+        assert_eq!(segment.start_scanline, 100);
+        assert_eq!(segment.scroll_x, 16);
+        assert_eq!(segment.scroll_y, 8);
+    }
+
+    #[test]
+    fn test_scroll_writes_during_vblank_apply_next_frame() {
+        let mut mapper = NromMapper::new(vec![], vec![0; 2048], Mirroring::Horizontal);
+        let mut ppu = PPU::empty(&mut mapper);
+
+        assert_eq!(ppu.scroll_segments()[0].scroll_y, 0);
+        ppu.scanline = 241; // vblank
+        ppu.write_to_scroll(0x00);
+        ppu.write_to_scroll(0x10); // coarse Y = 2 => scroll_y = 16
+
+        // simulate start of next frame
+        ppu.reset_scroll_segments_for_new_frame();
+        assert_eq!(ppu.scroll_segments()[0].scroll_y, 16);
     }
 
     #[test]

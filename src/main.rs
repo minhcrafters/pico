@@ -7,6 +7,7 @@ use pico::cart::Cart;
 use pico::cpu::CPU;
 use pico::framebuffer::Framebuffer;
 use pico::joypad;
+use pico::movie::FM2Movie;
 use pico::trace::trace;
 
 use sdl2::event::Event;
@@ -16,7 +17,7 @@ use sdl2::pixels::PixelFormatEnum;
 #[derive(Parser)]
 struct CliArgs {
     rom_file: String,
-
+    // movie_file: String,
     #[arg(short, long)]
     debug: bool,
 }
@@ -27,7 +28,6 @@ fn main() {
     let bytes: Vec<u8> = std::fs::read(args.rom_file).unwrap();
     let mut rom = Cart::new(&bytes).unwrap();
 
-    // ---- SDL setup (main thread owns all SDL objects) ----
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
@@ -45,7 +45,6 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
-    // map SDL keys to JoypadButton (main thread uses this to update shared state)
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
     key_map.insert(Keycode::Up, joypad::JoypadButton::UP);
@@ -56,14 +55,10 @@ fn main() {
     key_map.insert(Keycode::X, joypad::JoypadButton::BUTTON_A);
     key_map.insert(Keycode::Z, joypad::JoypadButton::BUTTON_B);
 
-    // Shared state and channel:
-    // - frame_tx/frame_rx: for PPU->main frame data (Vec<u8>)
-    // - shared_buttons: main thread updates button pressed booleans; bus callback reads them
     let (frame_tx, frame_rx) = channel::<Vec<u8>>();
     let shared_buttons: Arc<Mutex<HashMap<joypad::JoypadButton, bool>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    // Initialize all buttons to false
     {
         let mut sb = shared_buttons.lock().unwrap();
         for b in [
@@ -80,38 +75,41 @@ fn main() {
         }
     }
 
-    // clone handles into closure for Bus::new (these are 'static-safe: Sender and Arc<Mutex<...>>)
     let frame_tx_clone = frame_tx.clone();
     let shared_buttons_for_bus = shared_buttons.clone();
 
-    // The bus callback no longer captures `creator`/`texture`.
-    // It updates the provided joypad1 by reading shared_buttons, renders into a local Framebuffer,
-    // and sends the pixel bytes to the main thread.
-    let bus = Bus::new(&mut rom, move |ppu, joypad1| {
-        // apply shared button states to the provided joypad1
+    let bus = Bus::new(&mut rom, move |ppu, joypad1, _joypad2| {
         if let Ok(sb) = shared_buttons_for_bus.lock() {
             for (btn, pressed) in sb.iter() {
                 joypad1.set_button_pressed_status(*btn, *pressed);
             }
         }
 
-        // render to local framebuffer and send bytes to main loop
         let mut fb = Framebuffer::new();
         pico::render::render(ppu, &mut fb);
         let _ = frame_tx_clone.send(fb.data);
     });
+
+    // let mut movie1: FM2Movie;
+
+    // match FM2Movie::load_from_file(args.movie_file) {
+    //     Ok(movie) => {
+    //         movie1 = movie;
+    //     }
+    //     Err(e) => {
+    //         eprintln!("Error: {e}");
+    //     }
+    // }
 
     let mut cpu = CPU::new(bus);
 
     cpu.reset();
 
     cpu.run_with_callback(move |cpu| {
-        // Optional debug tracing
         if args.debug {
             println!("{}", trace(cpu));
         }
 
-        // 1) Poll SDL events and update shared_buttons
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -141,14 +139,10 @@ fn main() {
             }
         }
 
-        // 2) Try to get latest frame and blit it (non-blocking)
         if let Ok(frame_bytes) = frame_rx.try_recv() {
-            // update texture and present
             texture.update(None, &frame_bytes, 256 * 3).unwrap();
             canvas.copy(&texture, None, None).unwrap();
             canvas.present();
         }
-
-        // NOTE: keep this callback quick. If it becomes expensive, consider polling only every N cycles.
     });
 }

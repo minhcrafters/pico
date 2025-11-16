@@ -18,13 +18,22 @@ impl NromMapper {
 }
 
 impl Mapper for NromMapper {
-    fn read_prg(&self, mut addr: u16) -> u8 {
-        addr -= 0x8000;
-        if self.prg_rom.len() == 0x4000 && addr >= 0x4000 {
-            // mirror if needed
-            addr %= 0x4000;
+    fn read_prg(&self, addr: u16) -> u8 {
+        if !(0x8000..=0xFFFF).contains(&addr) {
+            return 0;
         }
-        self.prg_rom[addr as usize]
+
+        if self.prg_rom.is_empty() {
+            return 0;
+        }
+
+        let mut offset = (addr - 0x8000) as usize;
+        if self.prg_rom.len() == 0x4000 {
+            // Mirror 16KB PRG across both $8000-$BFFF and $C000-$FFFF
+            offset %= 0x4000;
+        }
+
+        self.prg_rom[offset]
     }
 
     fn write_prg(&mut self, _addr: u16, _data: u8) {

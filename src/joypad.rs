@@ -16,16 +16,16 @@ bitflags! {
 }
 
 pub struct Joypad {
+    pub button_status: JoypadButton,
+    pub button_index: u8,
     strobe: bool,
-    button_index: u8,
-    button_status: JoypadButton,
 }
 
 impl Joypad {
-    pub fn new() -> Self {
+    pub fn new(port: u8) -> Self {
         Joypad {
             strobe: false,
-            button_index: 0,
+            button_index: port,
             button_status: JoypadButton::from_bits_truncate(0),
         }
     }
@@ -59,7 +59,7 @@ mod test {
 
     #[test]
     fn test_strobe_mode() {
-        let mut joypad = Joypad::new();
+        let mut joypad = Joypad::new(0);
         joypad.write(1);
         joypad.set_button_pressed_status(JoypadButton::BUTTON_A, true);
         for _x in 0..10 {
@@ -69,7 +69,7 @@ mod test {
 
     #[test]
     fn test_strobe_mode_on_off() {
-        let mut joypad = Joypad::new();
+        let mut joypad = Joypad::new(0);
 
         joypad.write(0);
         joypad.set_button_pressed_status(JoypadButton::RIGHT, true);

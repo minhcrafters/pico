@@ -66,9 +66,10 @@ impl Mmc1Mapper {
     
     fn write_control_register(&mut self, value: u8) {
         self.mirroring_control = value & 0x03;
+        // Control register bits 0-1 select mirroring mode per https://www.nesdev.org/wiki/MMC1
         self.current_mirroring = match value & 0x03 {
-            0 => Mirroring::Vertical,
-            1 => Mirroring::Horizontal,
+            0 => Mirroring::SingleScreenLower,
+            1 => Mirroring::SingleScreenUpper,
             2 => Mirroring::Vertical,
             3 => Mirroring::Horizontal,
             _ => Mirroring::Vertical,

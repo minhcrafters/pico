@@ -1,8 +1,11 @@
 use crate::{cart::Cart, joypad::Joypad, mapper::Mapper, memory::Memory, ppu::PPU};
 
-const RAM: u16 = 0x0000;
-const RAM_MIRRORS_END: u16 = 0x1FFF;
+// Address ranges per https://www.nesdev.org/wiki/CPU_memory_map
+const CPU_RAM_MIRROR_MASK: u16 = 0x07FF;
+const CPU_RAM_MIRRORS_END: u16 = 0x1FFF;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
+const DISABLED_APU_IO_END: u16 = 0x401F;
+const CARTRIDGE_SPACE_START: u16 = 0x4020;
 
 pub struct Bus<'call> {
     cpu_vram: [u8; 2048],
@@ -10,15 +13,16 @@ pub struct Bus<'call> {
     ppu: PPU<'call>,
 
     cycles: usize,
-    gameloop_callback: Box<dyn FnMut(&PPU, &mut Joypad) + 'call>,
+    gameloop_callback: Box<dyn FnMut(&PPU, &mut Joypad, &mut Joypad) + 'call>,
 
     joypad1: Joypad,
+    joypad2: Joypad,
 }
 
 impl<'a> Bus<'a> {
     pub fn new<F>(cart: &'_ mut Cart, gameloop_callback: F) -> Bus<'_>
     where
-        F: FnMut(&PPU, &mut Joypad) + 'static,
+        F: FnMut(&PPU, &mut Joypad, &mut Joypad) + 'static,
     {
         let mapper_ptr: *mut dyn Mapper = cart.mapper.as_mut() as *mut dyn Mapper;
 
@@ -35,7 +39,8 @@ impl<'a> Bus<'a> {
             ppu,
             cycles: 0,
             gameloop_callback: Box::new(gameloop_callback),
-            joypad1: Joypad::new(),
+            joypad1: Joypad::new(0),
+            joypad2: Joypad::new(1),
         }
     }
 }
@@ -43,84 +48,42 @@ impl<'a> Bus<'a> {
 impl<'a> Bus<'a> {
     pub fn read(&mut self, addr: u16) -> u8 {
         match addr {
-            RAM..=RAM_MIRRORS_END => {
-                let mirror_down_addr = addr & 0b00000111_11111111;
-                self.cpu_vram[mirror_down_addr as usize]
-            }
-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
-                // panic!("Attempt to read from write-only PPU address {:x}", addr);
-                0
-            }
-            0x2002 => self.ppu.read_status(),
-            0x2004 => self.ppu.read_oam_data(),
-            0x2007 => self.ppu.read_data(),
-
-            0x4000..=0x4015 => {
-                // ignore APU
-                0
-            }
-
+            0x0000..=CPU_RAM_MIRRORS_END => self.cpu_vram[Self::mirror_cpu_vram_addr(addr)],
+            0x2000..=PPU_REGISTERS_MIRRORS_END => match Self::normalize_ppu_register_addr(addr) {
+                0x2002 => self.ppu.read_status(),
+                0x2004 => self.ppu.read_oam_data(),
+                0x2007 => self.ppu.read_data(),
+                _ => 0,
+            },
+            0x4000..=0x4013 => 0,
+            0x4014 => 0,
+            0x4015 => 0,
             0x4016 => self.joypad1.read(),
-
-            0x4017 => {
-                // ignore joypad 2
-                0
-            }
-
-            0x2008..=PPU_REGISTERS_MIRRORS_END => {
-                let mirror_down_addr = addr & 0b00100000_00000111;
-                self.read(mirror_down_addr)
-            }
-            0x8000..=0xFFFF => self.read_prg_rom(addr),
-            _ => {
-                // println!("Ignoring mem access at {}", addr);
-                0
-            }
+            0x4017 => 0, // self.joypad2.read(),
+            0x4018..=DISABLED_APU_IO_END => 0,
+            CARTRIDGE_SPACE_START..=0xFFFF => self.mapper.read_prg(addr),
         }
     }
 
     pub fn write(&mut self, addr: u16, data: u8) {
         match addr {
-            RAM..=RAM_MIRRORS_END => {
-                let mirror_down_addr = addr & 0b11111111111;
-                self.cpu_vram[mirror_down_addr as usize] = data;
+            0x0000..=CPU_RAM_MIRRORS_END => {
+                self.cpu_vram[Self::mirror_cpu_vram_addr(addr)] = data;
             }
-            0x2000 => {
-                self.ppu.write_to_ctrl(data);
+            0x2000..=PPU_REGISTERS_MIRRORS_END => match Self::normalize_ppu_register_addr(addr) {
+                0x2000 => self.ppu.write_to_ctrl(data),
+                0x2001 => self.ppu.write_to_mask(data),
+                0x2003 => self.ppu.write_to_oam_addr(data),
+                0x2004 => self.ppu.write_to_oam_data(data),
+                0x2005 => self.ppu.write_to_scroll(data),
+                0x2006 => self.ppu.write_to_ppu_addr(data),
+                0x2007 => self.ppu.write_to_data(data),
+                0x2002 => panic!("attempt to write to PPU status register"),
+                _ => {}
+            },
+            0x4000..=0x4013 => {
+                // ignore APU writes for now
             }
-            0x2001 => {
-                self.ppu.write_to_mask(data);
-            }
-
-            0x2002 => panic!("attempt to write to PPU status register"),
-
-            0x2003 => {
-                self.ppu.write_to_oam_addr(data);
-            }
-            0x2004 => {
-                self.ppu.write_to_oam_data(data);
-            }
-            0x2005 => {
-                self.ppu.write_to_scroll(data);
-            }
-
-            0x2006 => {
-                self.ppu.write_to_ppu_addr(data);
-            }
-            0x2007 => {
-                self.ppu.write_to_data(data);
-            }
-
-            0x4000..=0x4013 | 0x4015 => {
-                //ignore APU
-            }
-
-            0x4016 => self.joypad1.write(data),
-
-            0x4017 => {
-                // ignore joypad 2
-            }
-
             0x4014 => {
                 let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (data as u16) << 8;
@@ -134,16 +97,18 @@ impl<'a> Bus<'a> {
                 // let add_cycles: u16 = if self.cycles % 2 == 1 { 514 } else { 513 };
                 // self.tick(add_cycles); //todo this will cause weird effects as PPU will have 513/514 * 3 ticks
             }
-
-            0x2008..=PPU_REGISTERS_MIRRORS_END => {
-                let mirror_down_addr = addr & 0b00100000_00000111;
-                self.write(mirror_down_addr, data);
-                // todo!("PPU is not supported yet");
+            0x4015 => {
+                // ignore APU status
             }
-            0x8000..=0xFFFF => self.mapper.write_prg(addr, data),
-            _ => {
-                // println!("Ignoring mem write-access at 0x{:04X}", addr);
+            0x4016 => self.joypad1.write(data),
+            0x4017 => {
+                // ignore joypad 2 / APU frame counter for now
+                // self.joypad2.write(data);
             }
+            0x4018..=DISABLED_APU_IO_END => {
+                // disabled APU and IO functionality
+            }
+            CARTRIDGE_SPACE_START..=0xFFFF => self.mapper.write_prg(addr, data),
         }
     }
 
@@ -174,7 +139,7 @@ impl<'a> Bus<'a> {
         let nmi_after = self.ppu.nmi_interrupt.is_some();
 
         if !nmi_before && nmi_after {
-            (self.gameloop_callback)(&self.ppu, &mut self.joypad1);
+            (self.gameloop_callback)(&self.ppu, &mut self.joypad1, &mut self.joypad2);
         }
     }
 
@@ -186,8 +151,12 @@ impl<'a> Bus<'a> {
         self.mapper.poll_irq()
     }
 
-    fn read_prg_rom(&self, addr: u16) -> u8 {
-        self.mapper.read_prg(addr)
+    fn mirror_cpu_vram_addr(addr: u16) -> usize {
+        (addr & CPU_RAM_MIRROR_MASK) as usize
+    }
+
+    fn normalize_ppu_register_addr(addr: u16) -> u16 {
+        0x2000 + (addr & 0x0007)
     }
 }
 

@@ -17,7 +17,7 @@ impl ScrollRegister {
         }
     }
 
-    pub fn write(&mut self, data: u8) {
+    pub fn write(&mut self, data: u8) -> bool {
         if !self.latch {
             self.coarse_x = data >> 3;
             self.fine_x = data & 0x07;
@@ -26,6 +26,7 @@ impl ScrollRegister {
             self.fine_y = data & 0x07;
         }
         self.latch = !self.latch;
+        !self.latch
     }
 
     pub fn reset_latch(&mut self) {
