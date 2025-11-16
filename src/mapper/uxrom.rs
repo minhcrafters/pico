@@ -1,45 +1,45 @@
 use crate::cart::Mirroring;
 use crate::mapper::Mapper;
-use std::cell::RefCell;
 
-pub struct UxromMapper {
+pub struct UxRomMapper {
     prg_rom: Vec<u8>,
     chr_rom: Vec<u8>,
+    prg_bank: u8,
     mirroring: Mirroring,
-    bank: RefCell<u8>,
 }
 
-impl UxromMapper {
+impl UxRomMapper {
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
-        UxromMapper {
+        UxRomMapper {
             prg_rom,
             chr_rom,
+            prg_bank: 0,
             mirroring,
-            bank: RefCell::new(0),
         }
     }
 }
 
-impl Mapper for UxromMapper {
+impl Mapper for UxRomMapper {
     fn read_prg(&self, addr: u16) -> u8 {
-        let addr = addr as usize;
-        match addr {
-            0x8000..=0xBFFF => {
-                let bank = *self.bank.borrow() as usize % (self.prg_rom.len() / 0x4000);
-                self.prg_rom[bank * 0x4000 + (addr - 0x8000)]
-            }
-            0xC000..=0xFFFF => {
-                let last_bank = (self.prg_rom.len() / 0x4000) - 1;
-                self.prg_rom[last_bank * 0x4000 + (addr - 0xC000)]
-            }
-            _ => panic!("Invalid PRG read address: {:x}", addr),
+        let total_prg_banks = self.prg_rom.len() / 16384;
+
+        if addr >= 0x8000 && addr <= 0xBFFF {
+            // Lower 16KB: switchable bank (first N-1 banks)
+            let bank_addr = (self.prg_bank as usize * 16384) + ((addr - 0x8000) as usize);
+            self.prg_rom[bank_addr]
+        } else if addr >= 0xC000 && addr <= 0xFFFF {
+            // Upper 16KB: fixed to last bank
+            let bank_addr = ((total_prg_banks - 1) * 16384) + ((addr - 0xC000) as usize);
+            self.prg_rom[bank_addr]
+        } else {
+            0
         }
     }
 
-    fn write_prg(&self, addr: u16, data: u8) {
-        if addr >= 0x8000 {
-            let num_banks = self.prg_rom.len() / 0x4000;
-            *self.bank.borrow_mut() = data % num_banks as u8;
+    fn write_prg(&mut self, addr: u16, data: u8) {
+        // Bank switching at $8000-$FFFF
+        if addr >= 0x8000 && addr <= 0xFFFF {
+            self.prg_bank = data & 0x0F; // Use only the lower 4 bits
         }
     }
 
@@ -47,8 +47,8 @@ impl Mapper for UxromMapper {
         self.chr_rom[addr as usize]
     }
 
-    fn write_chr(&self, _addr: u16, _data: u8) {
-        // CHR ROM, ignore writes
+    fn write_chr(&mut self, _addr: u16, _data: u8) {
+        // UxROM CHR is ROM, ignore writes
     }
 
     fn mirroring(&self) -> Mirroring {

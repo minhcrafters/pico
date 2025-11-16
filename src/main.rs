@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, mpsc::channel};
 
 use clap::Parser;
 use pico::bus::Bus;
@@ -6,8 +7,8 @@ use pico::cart::Cart;
 use pico::cpu::CPU;
 use pico::framebuffer::Framebuffer;
 use pico::joypad;
-
 use pico::trace::trace;
+
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
@@ -24,10 +25,27 @@ fn main() {
     let args = CliArgs::parse();
 
     let bytes: Vec<u8> = std::fs::read(args.rom_file).unwrap();
-    let rom = Cart::new(&bytes).unwrap();
+    let mut rom = Cart::new(&bytes).unwrap();
 
-    let mut frame = Framebuffer::new();
+    // ---- SDL setup (main thread owns all SDL objects) ----
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+    let window = video_subsystem
+        .window("pico", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
+        .position_centered()
+        .build()
+        .unwrap();
 
+    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    canvas.set_scale(3.0, 3.0).unwrap();
+    let creator = canvas.texture_creator();
+    let mut texture = creator
+        .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
+        .unwrap();
+
+    let mut event_pump = sdl_context.event_pump().unwrap();
+
+    // map SDL keys to JoypadButton (main thread uses this to update shared state)
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
     key_map.insert(Keycode::Up, joypad::JoypadButton::UP);
@@ -38,61 +56,99 @@ fn main() {
     key_map.insert(Keycode::X, joypad::JoypadButton::BUTTON_A);
     key_map.insert(Keycode::Z, joypad::JoypadButton::BUTTON_B);
 
-    // init sdl2
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem
-        .window("pico", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
-        .position_centered()
-        .build()
-        .unwrap();
+    // Shared state and channel:
+    // - frame_tx/frame_rx: for PPU->main frame data (Vec<u8>)
+    // - shared_buttons: main thread updates button pressed booleans; bus callback reads them
+    let (frame_tx, frame_rx) = channel::<Vec<u8>>();
+    let shared_buttons: Arc<Mutex<HashMap<joypad::JoypadButton, bool>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
-    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    canvas.set_scale(3.0, 3.0).unwrap();
+    // Initialize all buttons to false
+    {
+        let mut sb = shared_buttons.lock().unwrap();
+        for b in [
+            joypad::JoypadButton::DOWN,
+            joypad::JoypadButton::UP,
+            joypad::JoypadButton::RIGHT,
+            joypad::JoypadButton::LEFT,
+            joypad::JoypadButton::SELECT,
+            joypad::JoypadButton::START,
+            joypad::JoypadButton::BUTTON_A,
+            joypad::JoypadButton::BUTTON_B,
+        ] {
+            sb.insert(b, false);
+        }
+    }
 
-    let creator = canvas.texture_creator();
-    let mut texture = creator
-        .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
-        .unwrap();
+    // clone handles into closure for Bus::new (these are 'static-safe: Sender and Arc<Mutex<...>>)
+    let frame_tx_clone = frame_tx.clone();
+    let shared_buttons_for_bus = shared_buttons.clone();
 
-    // the game cycle
-    let bus = Bus::new(&rom, move |ppu, joypad1| {
-        pico::render::render(ppu, &mut frame);
-        texture.update(None, &frame.data, 256 * 3).unwrap();
+    // The bus callback no longer captures `creator`/`texture`.
+    // It updates the provided joypad1 by reading shared_buttons, renders into a local Framebuffer,
+    // and sends the pixel bytes to the main thread.
+    let bus = Bus::new(&mut rom, move |ppu, joypad1| {
+        // apply shared button states to the provided joypad1
+        if let Ok(sb) = shared_buttons_for_bus.lock() {
+            for (btn, pressed) in sb.iter() {
+                joypad1.set_button_pressed_status(*btn, *pressed);
+            }
+        }
 
-        canvas.copy(&texture, None, None).unwrap();
+        // render to local framebuffer and send bytes to main loop
+        let mut fb = Framebuffer::new();
+        pico::render::render(ppu, &mut fb);
+        let _ = frame_tx_clone.send(fb.data);
+    });
 
-        canvas.present();
+    let mut cpu = CPU::new(bus);
+
+    cpu.reset();
+
+    cpu.run_with_callback(move |cpu| {
+        // Optional debug tracing
+        if args.debug {
+            println!("{}", trace(cpu));
+        }
+
+        // 1) Poll SDL events and update shared_buttons
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
-                } => std::process::exit(0),
+                } => {
+                    std::process::exit(0);
+                }
                 Event::KeyDown { keycode, .. } => {
-                    if let Some(key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        joypad1.set_button_pressed_status(*key, true);
+                    if let Some(kc) = keycode {
+                        if let Some(btn) = key_map.get(&kc) {
+                            let mut sb = shared_buttons.lock().unwrap();
+                            sb.insert(*btn, true);
+                        }
                     }
                 }
                 Event::KeyUp { keycode, .. } => {
-                    if let Some(key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        joypad1.set_button_pressed_status(*key, false);
+                    if let Some(kc) = keycode {
+                        if let Some(btn) = key_map.get(&kc) {
+                            let mut sb = shared_buttons.lock().unwrap();
+                            sb.insert(*btn, false);
+                        }
                     }
                 }
-                _ => { /* do nothing */ }
+                _ => {}
             }
         }
-    });
 
-    let mut cpu = CPU::new(bus);
-
-    cpu.reset();
-    // cpu.run();
-    cpu.run_with_callback(move |cpu| {
-        if args.debug {
-            println!("{}", trace(cpu));
+        // 2) Try to get latest frame and blit it (non-blocking)
+        if let Ok(frame_bytes) = frame_rx.try_recv() {
+            // update texture and present
+            texture.update(None, &frame_bytes, 256 * 3).unwrap();
+            canvas.copy(&texture, None, None).unwrap();
+            canvas.present();
         }
+
+        // NOTE: keep this callback quick. If it becomes expensive, consider polling only every N cycles.
     });
 }

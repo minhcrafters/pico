@@ -1,8 +1,8 @@
-use crate::cpu::AddressingMode;
-use crate::cpu::CPU;
+use crate::cpu::{AddressingMode, CPU};
+use crate::memory::Memory;
 use crate::opcodes::CPU_OPCODES;
 
-pub fn trace(cpu: &mut CPU) -> String {
+pub fn trace<M: Memory>(cpu: &mut CPU<M>) -> String {
     let code = cpu.memory.read(cpu.registers.pc);
     let ops = CPU_OPCODES.find_by_code(code).unwrap();
 

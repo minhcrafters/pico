@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 bitflags! {
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Eq, PartialEq, Hash)]
     // https://wiki.nesdev.com/w/index.php/Controller_reading_code
     pub struct JoypadButton: u8 {
         const RIGHT             = 0b10000000;

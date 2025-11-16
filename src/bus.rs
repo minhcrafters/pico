@@ -1,4 +1,4 @@
-use crate::{cart::Cart, joypad::Joypad, mapper::Mapper, ppu::PPU};
+use crate::{cart::Cart, joypad::Joypad, mapper::Mapper, memory::Memory, ppu::PPU};
 
 const RAM: u16 = 0x0000;
 const RAM_MIRRORS_END: u16 = 0x1FFF;
@@ -6,7 +6,7 @@ const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
 pub struct Bus<'call> {
     cpu_vram: [u8; 2048],
-    mapper: &'call dyn Mapper,
+    mapper: &'call mut dyn Mapper,
     ppu: PPU<'call>,
 
     cycles: usize,
@@ -16,16 +16,25 @@ pub struct Bus<'call> {
 }
 
 impl<'a> Bus<'a> {
-    pub fn new<'call, F>(cart: &'call Cart, gameloop_callback: F) -> Bus<'call>
+    pub fn new<F>(cart: &'_ mut Cart, gameloop_callback: F) -> Bus<'_>
     where
-        F: FnMut(&PPU, &mut Joypad) + 'call,
+        F: FnMut(&PPU, &mut Joypad) + 'static,
     {
+        let mapper_ptr: *mut dyn Mapper = cart.mapper.as_mut() as *mut dyn Mapper;
+
+        // Create a &mut dyn Mapper for PPU::new using unsafe from the raw pointer
+        let ppu = unsafe {
+            // Safety: we know cart.mapper lives for at least the lifetime 'a we claim,
+            // and we ensure no simultaneous conflicting borrows at runtime.
+            PPU::new(&mut *mapper_ptr)
+        };
+
         Bus {
             cpu_vram: [0; 2048],
-            mapper: &*cart.mapper,
-            ppu: PPU::new(&*cart.mapper),
+            mapper: unsafe { &mut *mapper_ptr },
+            ppu,
             cycles: 0,
-            gameloop_callback: Box::from(gameloop_callback),
+            gameloop_callback: Box::new(gameloop_callback),
             joypad1: Joypad::new(),
         }
     }
@@ -173,7 +182,37 @@ impl<'a> Bus<'a> {
         self.ppu.poll_nmi_interrupt()
     }
 
+    pub fn poll_irq_status(&mut self) -> Option<u8> {
+        self.mapper.poll_irq()
+    }
+
     fn read_prg_rom(&self, addr: u16) -> u8 {
         self.mapper.read_prg(addr)
+    }
+}
+
+impl<'a> Memory for Bus<'a> {
+    fn read(&mut self, addr: u16) -> u8 {
+        self.read(addr)
+    }
+
+    fn write(&mut self, addr: u16, data: u8) {
+        self.write(addr, data);
+    }
+
+    fn tick(&mut self, cycles: u8) {
+        self.tick(cycles);
+    }
+
+    fn poll_nmi_status(&mut self) -> Option<u8> {
+        self.poll_nmi_status()
+    }
+
+    fn poll_irq_status(&mut self) -> Option<u8> {
+        self.poll_irq_status()
+    }
+
+    fn load(&mut self, start_addr: u16, data: &[u8]) {
+        self.load(start_addr, data);
     }
 }

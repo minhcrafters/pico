@@ -27,7 +27,7 @@ impl Mapper for NromMapper {
         self.prg_rom[addr as usize]
     }
 
-    fn write_prg(&self, _addr: u16, _data: u8) {
+    fn write_prg(&mut self, _addr: u16, _data: u8) {
         // NROM has no PRG RAM, ignore writes
     }
 
@@ -35,7 +35,7 @@ impl Mapper for NromMapper {
         self.chr_rom[addr as usize]
     }
 
-    fn write_chr(&self, _addr: u16, _data: u8) {
+    fn write_chr(&mut self, _addr: u16, _data: u8) {
         // NROM CHR is ROM, ignore writes
     }
 

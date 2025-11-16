@@ -1,48 +1,50 @@
 use crate::cart::Mirroring;
 use crate::mapper::Mapper;
-use std::cell::RefCell;
 
-pub struct CnromMapper {
+pub struct CnRomMapper {
     prg_rom: Vec<u8>,
     chr_rom: Vec<u8>,
+    chr_bank: u8,
     mirroring: Mirroring,
-    chr_bank: RefCell<u8>,
 }
 
-impl CnromMapper {
+impl CnRomMapper {
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
-        CnromMapper {
+        CnRomMapper {
             prg_rom,
             chr_rom,
+            chr_bank: 0,
             mirroring,
-            chr_bank: RefCell::new(0),
         }
     }
 }
 
-impl Mapper for CnromMapper {
-    fn read_prg(&self, mut addr: u16) -> u8 {
-        addr -= 0x8000;
-        if self.prg_rom.len() == 0x4000 && addr >= 0x4000 {
-            addr %= 0x4000;
+impl Mapper for CnRomMapper {
+    fn read_prg(&self, addr: u16) -> u8 {
+        // CnROM has fixed PRG - entire 32KB at $8000-$FFFF
+        if addr >= 0x8000 && addr <= 0xFFFF {
+            let addr_in_rom = (addr - 0x8000) as usize;
+            self.prg_rom[addr_in_rom % self.prg_rom.len()]
+        } else {
+            0
         }
-        self.prg_rom[addr as usize]
     }
 
-    fn write_prg(&self, addr: u16, data: u8) {
-        if addr >= 0x8000 {
-            let num_banks = self.chr_rom.len() / 0x2000;
-            *self.chr_bank.borrow_mut() = data % num_banks as u8;
-        }
+    fn write_prg(&mut self, _addr: u16, _data: u8) {
+        // CnROM has no PRG RAM, ignore writes
     }
 
     fn read_chr(&self, addr: u16) -> u8 {
-        let bank = *self.chr_bank.borrow() as usize % (self.chr_rom.len() / 0x2000);
-        self.chr_rom[bank * 0x2000 + addr as usize]
+        // 8KB CHR bank switching at $0000-$1FFF
+        let chr_bank_addr = (self.chr_bank as usize * 8192) + (addr as usize);
+        self.chr_rom[chr_bank_addr % self.chr_rom.len()]
     }
 
-    fn write_chr(&self, _addr: u16, _data: u8) {
-        // CHR ROM, ignore writes
+    fn write_chr(&mut self, addr: u16, data: u8) {
+        // CHR bank switching at $0000-$1FFF  
+        if addr <= 0x1FFF {
+            self.chr_bank = data & 0x03; // Use only the lower 2 bits for 4 banks
+        }
     }
 
     fn mirroring(&self) -> Mirroring {

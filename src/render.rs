@@ -18,7 +18,7 @@ impl Rect {
     }
 }
 
-fn bg_pallette(ppu: &PPU, attribute_table: &[u8], tile_column: usize, tile_row: usize) -> [u8; 4] {
+fn bg_palette(ppu: &PPU, attribute_table: &[u8], tile_column: usize, tile_row: usize) -> [u8; 4] {
     let attr_table_idx = tile_row / 4 * 8 + tile_column / 4;
     let attr_byte = attribute_table[attr_table_idx];
 
@@ -57,8 +57,6 @@ fn render_name_table(
     shift_x: isize,
     shift_y: isize,
 ) {
-    let bank = ppu.ctrl.bknd_pattern_addr();
-
     let attribute_table = &name_table[0x3c0..0x400];
 
     for i in 0..0x3c0 {
@@ -67,10 +65,12 @@ fn render_name_table(
         let tile_idx = name_table[i] as u16;
         let mut tile = [0u8; 16];
         for i in 0..16 {
-            tile[i] = ppu.mapper.read_chr(bank + tile_idx * 16 + i as u16);
+            tile[i] = ppu
+                .mapper
+                .read_chr(ppu.ctrl.bknd_pattern_addr() + tile_idx * 16 + i as u16);
         }
         let tile = &tile;
-        let palette = bg_pallette(ppu, attribute_table, tile_column, tile_row);
+        let palette = bg_palette(ppu, attribute_table, tile_column, tile_row);
 
         for y in 0..=7 {
             let mut upper = tile[y];
@@ -110,19 +110,20 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
     let scroll_x = (ppu.scroll.coarse_x as usize) * 8 + (ppu.scroll.fine_x as usize);
     let scroll_y = (ppu.scroll.coarse_y as usize) * 8 + (ppu.scroll.fine_y as usize);
 
-    let (main_nametable, second_nametable) = match (&ppu.mapper.mirroring(), ppu.ctrl.nametable_addr()) {
-        (Mirroring::Vertical, 0x2000)
-        | (Mirroring::Vertical, 0x2800)
-        | (Mirroring::Horizontal, 0x2000)
-        | (Mirroring::Horizontal, 0x2400) => (&ppu.vram[0..0x400], &ppu.vram[0x400..0x800]),
-        (Mirroring::Vertical, 0x2400)
-        | (Mirroring::Vertical, 0x2C00)
-        | (Mirroring::Horizontal, 0x2800)
-        | (Mirroring::Horizontal, 0x2C00) => (&ppu.vram[0x400..0x800], &ppu.vram[0..0x400]),
-        (_, _) => {
-            panic!("Not supported mirroring type {:?}", ppu.mapper.mirroring());
-        }
-    };
+    let (main_nametable, second_nametable) =
+        match (&ppu.mapper.mirroring(), ppu.ctrl.nametable_addr()) {
+            (Mirroring::Vertical, 0x2000)
+            | (Mirroring::Vertical, 0x2800)
+            | (Mirroring::Horizontal, 0x2000)
+            | (Mirroring::Horizontal, 0x2400) => (&ppu.vram[0..0x400], &ppu.vram[0x400..0x800]),
+            (Mirroring::Vertical, 0x2400)
+            | (Mirroring::Vertical, 0x2C00)
+            | (Mirroring::Horizontal, 0x2800)
+            | (Mirroring::Horizontal, 0x2C00) => (&ppu.vram[0x400..0x800], &ppu.vram[0..0x400]),
+            (_, _) => {
+                panic!("Not supported mirroring type {:?}", ppu.mapper.mirroring());
+            }
+        };
 
     render_name_table(
         ppu,
@@ -169,11 +170,12 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
         };
         let pallette_idx = ppu.oam_data[i + 2] & 0b11;
         let sprite_palette = sprite_palette(ppu, pallette_idx);
-        let bank: u16 = ppu.ctrl.sprt_pattern_addr();
 
         let mut tile = [0u8; 16];
         for i in 0..16 {
-            tile[i] = ppu.mapper.read_chr(bank + tile_idx * 16 + i as u16);
+            tile[i] = ppu
+                .mapper
+                .read_chr(ppu.ctrl.sprt_pattern_addr() + tile_idx * 16 + i as u16);
         }
         let tile = &tile;
 

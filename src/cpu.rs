@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use bitflags::bitflags;
 
-use crate::bus::Bus;
+use crate::memory::Memory;
 use crate::opcodes::{CPU_OPCODES, Mnemonic};
 
 pub const STACK_START: u16 = 0x0100;
@@ -61,6 +61,7 @@ mod interrupt {
     #[derive(PartialEq, Eq)]
     pub enum InterruptType {
         NMI,
+        IRQ,
         BRK,
     }
 
@@ -74,27 +75,34 @@ mod interrupt {
 
     pub(super) const NMI: Interrupt = Interrupt {
         itype: InterruptType::NMI,
-        vector_addr: 0xfffA,
+        vector_addr: 0xFFFA,
+        b_flag_mask: 0b00100000,
+        cpu_cycles: 2,
+    };
+
+    pub(super) const IRQ: Interrupt = Interrupt {
+        itype: InterruptType::IRQ,
+        vector_addr: 0xFFFE,
         b_flag_mask: 0b00100000,
         cpu_cycles: 2,
     };
 
     pub(super) const BRK: Interrupt = Interrupt {
         itype: InterruptType::BRK,
-        vector_addr: 0xfffe,
+        vector_addr: 0xFFFE,
         b_flag_mask: 0b00110000,
         cpu_cycles: 1,
     };
 }
 
-pub struct CPU<'a> {
+pub struct CPU<M: Memory> {
     pub registers: Registers,
-    pub memory: Bus<'a>,
+    pub memory: M,
     extra_cycles: u8,
 }
 
-impl<'a> CPU<'a> {
-    pub fn new(memory: Bus<'a>) -> Self {
+impl<M: Memory> CPU<M> {
+    pub fn new(memory: M) -> Self {
         CPU {
             registers: Registers {
                 a: 0,
@@ -115,13 +123,21 @@ impl<'a> CPU<'a> {
 
     pub fn run_with_callback<F>(&mut self, mut callback: F)
     where
-        F: FnMut(&mut CPU),
+        F: FnMut(&mut CPU<M>),
     {
         loop {
             callback(self);
 
+            // Check for NMI first (has higher priority)
             if let Some(_nmi) = self.memory.poll_nmi_status() {
                 self.interrupt(interrupt::NMI);
+            }
+
+            // Check for IRQ (maskable interrupt) if not disabled
+            if let Some(_irq) = self.memory.poll_irq_status() {
+                if !self.registers.status.contains(StatusFlags::INTERRUPT_DISABLE) {
+                    self.interrupt(interrupt::IRQ);
+                }
             }
 
             let opcode = self.memory.read(self.registers.pc);
@@ -346,7 +362,7 @@ impl<'a> CPU<'a> {
 }
 
 /// Instructions
-impl<'a> CPU<'a> {
+impl<M: Memory> CPU<M> {
     fn adc(&mut self, mode: &AddressingMode) {
         let (addr, page_cross) = self.get_operand_address(mode);
         if page_cross {
@@ -1055,7 +1071,7 @@ impl<'a> CPU<'a> {
 }
 
 /// Helpers
-impl<'a> CPU<'a> {
+impl<M: Memory> CPU<M> {
     fn stack_addr(&self) -> u16 {
         STACK_START + self.registers.sp as u16
     }
@@ -1094,198 +1110,6 @@ impl<'a> CPU<'a> {
         self.registers.status.insert(StatusFlags::INTERRUPT_DISABLE);
 
         self.memory.tick(interrupt.cpu_cycles);
-        self.registers.pc = self.memory.read_u16(0xFFFA);
+        self.registers.pc = self.memory.read_u16(interrupt.vector_addr);
     }
 }
-
-// #[cfg(test)]
-// mod test {
-//     use super::*;
-
-//     #[test]
-//     fn test_0xa9_lda_immediate_load_data() {
-//         let mut cpu = CPU::new();
-//         cpu.load_and_run(vec![0xa9, 0x05, 0x00], None);
-//         assert_eq!(cpu.registers.a, 0x05);
-//         assert!(cpu.registers.status.bits() & 0b0000_0010 == 0b00);
-//         assert!(cpu.registers.status.bits() & 0b1000_0000 == 0);
-//     }
-
-//     #[test]
-//     fn test_0xa9_lda_zero_flag() {
-//         let mut cpu = CPU::new();
-//         cpu.load_and_run(vec![0xa9, 0x00, 0x00], None);
-//         assert!(cpu.registers.status.bits() & 0b0000_0010 == 0b10);
-//     }
-
-//     #[test]
-//     fn test_0xaa_tax_move_a_to_x() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 10;
-//         cpu.load(vec![0xaa, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.x, 10)
-//     }
-
-//     #[test]
-//     fn test_0xe8_inx_increment_x() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.x = 5;
-//         cpu.load(vec![0xe8, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.x, 6)
-//     }
-
-//     #[test]
-//     fn test_5_ops_working_together() {
-//         let mut cpu = CPU::new();
-//         cpu.load_and_run(vec![0xa9, 0xc0, 0xaa, 0xe8, 0x00], None);
-
-//         assert_eq!(cpu.registers.x, 0xc1)
-//     }
-
-//     #[test]
-//     fn test_inx_overflow() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.x = 0xff;
-//         cpu.load(vec![0xe8, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.x, 0)
-//     }
-
-//     #[test]
-//     fn test_inx_zero_flag() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.x = 0xff;
-//         cpu.load(vec![0xe8, 0x00], None);
-//         cpu.run();
-
-//         assert!(cpu.registers.status.bits() & 0b0000_0010 == 0b10);
-//     }
-
-//     #[test]
-//     fn test_inx_negative_flag() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.x = 0xfe;
-//         cpu.load(vec![0xe8, 0x00], None);
-//         cpu.run();
-
-//         assert!(cpu.registers.status.bits() & 0b1000_0000 == 0b1000_0000);
-//     }
-
-//     #[test]
-//     fn test_reset_sets_pc_to_reset_vector() {
-//         let mut cpu = CPU::new();
-//         cpu.bus.write_u16(0xFFFC, 0x1234);
-//         cpu.reset();
-//         assert_eq!(cpu.registers.pc, 0x1234);
-//     }
-
-//     #[test]
-//     fn test_load_writes_program_to_memory() {
-//         let mut cpu = CPU::new();
-//         let program = vec![0xA9, 0x01, 0x00];
-//         cpu.load(program.clone(), None);
-//         for (i, &byte) in program.iter().enumerate() {
-//             assert_eq!(cpu.bus.read(PRG_START + i as u16), byte);
-//         }
-//     }
-
-//     #[test]
-//     fn test_lda_from_memory() {
-//         let mut cpu = CPU::new();
-//         cpu.bus.write(0x10, 0x55);
-
-//         cpu.load_and_run(vec![0xa5, 0x10, 0x00], None);
-
-//         assert_eq!(cpu.registers.a, 0x55);
-//     }
-// }
-
-// #[cfg(test)]
-// mod test_cpu_instrs {
-//     use super::*;
-
-//     #[test]
-//     fn test_adc_immediate() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 0x10;
-
-//         cpu.load(vec![0x69, 0x05, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.a, 0x15);
-//     }
-
-//     #[test]
-//     fn test_adc_with_carry() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 0xFF;
-
-//         cpu.load(vec![0x69, 0x02, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.a, 0x01);
-//         assert!(cpu.registers.status.contains(StatusFlags::CARRY));
-//     }
-
-//     #[test]
-//     fn test_and_immediate() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 0b1100_1100;
-
-//         cpu.load(vec![0x29, 0b1010_1010, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.a, 0b1000_1000);
-//     }
-
-//     #[test]
-//     fn test_asl_accumulator() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 0b0100_0001;
-
-//         cpu.load(vec![0x0A, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.registers.a, 0b1000_0010);
-//         assert!(!cpu.registers.status.contains(StatusFlags::CARRY));
-//     }
-
-//     #[test]
-//     fn test_lda_absolute() {
-//         let mut cpu = CPU::new();
-//         cpu.bus.write(0x1234, 0x42);
-
-//         cpu.load_and_run(vec![0xad, 0x34, 0x12, 0x00], None);
-
-//         assert_eq!(cpu.registers.a, 0x42);
-//     }
-
-//     #[test]
-//     fn test_jmp_absolute() {
-//         let mut cpu = CPU::new();
-
-//         cpu.load(vec![0x4C, 0x05, 0x80, 0x00, 0x00, 0xA9, 0x05, 0x00], None);
-//         cpu.reset();
-//         cpu.run();
-
-//         println!("PC after JMP: {:04X}", cpu.registers.pc);
-
-//         assert_eq!(cpu.registers.pc, PRG_START | 0x8);
-//     }
-
-//     #[test]
-//     fn test_sta_zero_page() {
-//         let mut cpu = CPU::new();
-//         cpu.registers.a = 0x37;
-
-//         cpu.load(vec![0x85, 0x10, 0x00], None);
-//         cpu.run();
-
-//         assert_eq!(cpu.bus.read(0x10), 0x37);
-//     }
-// }

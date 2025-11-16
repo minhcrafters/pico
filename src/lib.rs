@@ -4,6 +4,7 @@ pub mod cpu;
 pub mod framebuffer;
 pub mod joypad;
 pub mod mapper;
+pub mod memory;
 pub mod opcodes;
 pub mod palette;
 pub mod ppu;
