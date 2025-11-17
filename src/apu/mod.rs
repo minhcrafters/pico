@@ -42,8 +42,8 @@ impl APU {
         let sr = sample_rate.max(1);
         let interval = CPU_FREQUENCY_NTSC / sr as f64;
         APU {
-            pulse1: PulseChannel::new(1),
-            pulse2: PulseChannel::new(0),
+            pulse1: PulseChannel::new(0),
+            pulse2: PulseChannel::new(1),
             triangle: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DmcChannel::new(),

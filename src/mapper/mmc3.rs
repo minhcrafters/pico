@@ -17,6 +17,8 @@ pub struct Mmc3Mapper {
     selected_register: u8,
     chr_inversion: bool,
     prg_mode: bool,
+    prg_banks: [usize; 4],
+    chr_banks: [usize; 8],
 
     mirroring: Mirroring,
     mirroring_locked: bool,
@@ -43,7 +45,7 @@ impl Mmc3Mapper {
         bank_registers[6] = 0;
         bank_registers[7] = 1;
 
-        Mmc3Mapper {
+        let mut mapper = Mmc3Mapper {
             prg_rom,
             chr,
             chr_is_ram,
@@ -54,6 +56,8 @@ impl Mmc3Mapper {
             selected_register: 0,
             chr_inversion: false,
             prg_mode: false,
+            prg_banks: [0; 4],
+            chr_banks: [0; 8],
             mirroring: mirroring.clone(),
             mirroring_locked: matches!(mirroring, Mirroring::FourScreen),
             irq_latch: 0,
@@ -61,7 +65,11 @@ impl Mmc3Mapper {
             irq_reload: false,
             irq_enabled: false,
             irq_pending: false,
-        }
+        };
+
+        mapper.sync_chr_banks();
+        mapper.sync_prg_banks();
+        mapper
     }
 
     fn prg_bank_count(&self) -> usize {
@@ -69,32 +77,101 @@ impl Mmc3Mapper {
         if count == 0 { 1 } else { count }
     }
 
-    fn prg_bank_offset_by_index(&self, bank_index: usize) -> usize {
+    fn chr_bank_count(&self) -> usize {
+        let count = self.chr.len() / CHR_BANK_SIZE_1K;
+        if count == 0 { 1 } else { count }
+    }
+
+    fn prg_bank_offset(&self, bank_index: u8) -> usize {
         if self.prg_rom.is_empty() {
             0
         } else {
             let count = self.prg_bank_count();
-            let index = bank_index % count;
-            (index * PRG_BANK_SIZE) % self.prg_rom.len()
+            let index = (bank_index as usize) % count;
+            index * PRG_BANK_SIZE
         }
     }
 
-    fn fixed_prg_bank_offset(&self, index_from_end: usize) -> usize {
-        if self.prg_rom.is_empty() {
+    fn chr_bank_address(&self, value: u8, bank_size: usize) -> usize {
+        if self.chr.is_empty() {
             0
         } else {
-            let count = self.prg_bank_count();
-            let index = if count == 0 {
-                0
-            } else {
-                count.saturating_sub(index_from_end)
-            };
-            self.prg_bank_offset_by_index(index)
+            let mut index = value as usize;
+            if bank_size == CHR_BANK_SIZE_2K {
+                index &= !1;
+            }
+            let count = self.chr_bank_count();
+            index %= count;
+            let base = (index * CHR_BANK_SIZE_1K) % self.chr.len();
+            base & !(bank_size - 1)
         }
     }
 
-    fn prg_bank_offset_from_reg(&self, reg: usize) -> usize {
-        self.prg_bank_offset_by_index(self.bank_registers[reg] as usize)
+    fn sync_prg_banks(&mut self) {
+        if self.prg_rom.is_empty() {
+            self.prg_banks = [0; 4];
+            return;
+        }
+
+        let count = self.prg_bank_count();
+        let last_bank = count - 1;
+        let second_last = if count >= 2 { count - 2 } else { last_bank };
+        let last_offset = last_bank * PRG_BANK_SIZE;
+        let second_last_offset = second_last * PRG_BANK_SIZE;
+
+        if self.prg_mode {
+            self.prg_banks[0] = second_last_offset;
+            self.prg_banks[1] = self.prg_bank_offset(self.bank_registers[7]);
+            self.prg_banks[2] = self.prg_bank_offset(self.bank_registers[6]);
+            self.prg_banks[3] = last_offset;
+        } else {
+            self.prg_banks[0] = self.prg_bank_offset(self.bank_registers[6]);
+            self.prg_banks[1] = self.prg_bank_offset(self.bank_registers[7]);
+            self.prg_banks[2] = second_last_offset;
+            self.prg_banks[3] = last_offset;
+        }
+    }
+
+    fn set_chr_pair(&mut self, slot: usize, value: u8) {
+        if self.chr.is_empty() {
+            self.chr_banks[slot] = 0;
+            self.chr_banks[slot + 1] = 0;
+            return;
+        }
+        let base = self.chr_bank_address(value, CHR_BANK_SIZE_2K);
+        self.chr_banks[slot] = base;
+        self.chr_banks[slot + 1] = (base + CHR_BANK_SIZE_1K) % self.chr.len();
+    }
+
+    fn set_chr_single(&mut self, slot: usize, value: u8) {
+        if self.chr.is_empty() {
+            self.chr_banks[slot] = 0;
+            return;
+        }
+        self.chr_banks[slot] = self.chr_bank_address(value, CHR_BANK_SIZE_1K);
+    }
+
+    fn sync_chr_banks(&mut self) {
+        if self.chr.is_empty() {
+            self.chr_banks = [0; 8];
+            return;
+        }
+
+        if !self.chr_inversion {
+            self.set_chr_pair(0, self.bank_registers[0]);
+            self.set_chr_pair(2, self.bank_registers[1]);
+            self.set_chr_single(4, self.bank_registers[2]);
+            self.set_chr_single(5, self.bank_registers[3]);
+            self.set_chr_single(6, self.bank_registers[4]);
+            self.set_chr_single(7, self.bank_registers[5]);
+        } else {
+            self.set_chr_single(0, self.bank_registers[2]);
+            self.set_chr_single(1, self.bank_registers[3]);
+            self.set_chr_single(2, self.bank_registers[4]);
+            self.set_chr_single(3, self.bank_registers[5]);
+            self.set_chr_pair(4, self.bank_registers[0]);
+            self.set_chr_pair(6, self.bank_registers[1]);
+        }
     }
 
     fn prg_addr(&self, addr: u16) -> Option<usize> {
@@ -102,46 +179,17 @@ impl Mmc3Mapper {
             return None;
         }
 
-        let bank_offset = match addr {
-            0x8000..=0x9FFF => {
-                if self.prg_mode {
-                    self.fixed_prg_bank_offset(2)
-                } else {
-                    self.prg_bank_offset_from_reg(6)
-                }
-            }
-            0xA000..=0xBFFF => self.prg_bank_offset_from_reg(7),
-            0xC000..=0xDFFF => {
-                if self.prg_mode {
-                    self.prg_bank_offset_from_reg(6)
-                } else {
-                    self.fixed_prg_bank_offset(2)
-                }
-            }
-            0xE000..=0xFFFF => self.fixed_prg_bank_offset(1),
+        let slot = match addr {
+            0x8000..=0x9FFF => 0,
+            0xA000..=0xBFFF => 1,
+            0xC000..=0xDFFF => 2,
+            0xE000..=0xFFFF => 3,
             _ => return None,
         };
 
+        let base = self.prg_banks[slot] % self.prg_rom.len();
         let offset = (addr as usize) & (PRG_BANK_SIZE - 1);
-        Some((bank_offset + offset) % self.prg_rom.len())
-    }
-
-    fn chr_bank_offset(&self, register: usize, bank_size: usize) -> usize {
-        if self.chr.is_empty() {
-            return 0;
-        }
-
-        let mut bank = self.bank_registers[register] as usize;
-        if register <= 1 {
-            bank &= !1;
-        }
-
-        let total_1k_banks = self.chr.len() / CHR_BANK_SIZE_1K;
-        let normalized = if total_1k_banks == 0 { 1 } else { total_1k_banks };
-        bank %= normalized;
-
-        let base = (bank * CHR_BANK_SIZE_1K) % self.chr.len();
-        base & !(bank_size - 1)
+        Some((base + offset) % self.prg_rom.len())
     }
 
     fn chr_addr(&self, addr: u16) -> usize {
@@ -149,43 +197,30 @@ impl Mmc3Mapper {
             return (addr as usize) & 0x1FFF;
         }
 
-        let (register, bank_size, base) = if !self.chr_inversion {
-            match addr {
-                0x0000..=0x07FF => (0, CHR_BANK_SIZE_2K, 0x0000),
-                0x0800..=0x0FFF => (1, CHR_BANK_SIZE_2K, 0x0800),
-                0x1000..=0x13FF => (2, CHR_BANK_SIZE_1K, 0x1000),
-                0x1400..=0x17FF => (3, CHR_BANK_SIZE_1K, 0x1400),
-                0x1800..=0x1BFF => (4, CHR_BANK_SIZE_1K, 0x1800),
-                0x1C00..=0x1FFF => (5, CHR_BANK_SIZE_1K, 0x1C00),
-                _ => (2, CHR_BANK_SIZE_1K, 0x1000),
-            }
-        } else {
-            match addr {
-                0x0000..=0x03FF => (2, CHR_BANK_SIZE_1K, 0x0000),
-                0x0400..=0x07FF => (3, CHR_BANK_SIZE_1K, 0x0400),
-                0x0800..=0x0BFF => (4, CHR_BANK_SIZE_1K, 0x0800),
-                0x0C00..=0x0FFF => (5, CHR_BANK_SIZE_1K, 0x0C00),
-                0x1000..=0x17FF => (0, CHR_BANK_SIZE_2K, 0x1000),
-                0x1800..=0x1FFF => (1, CHR_BANK_SIZE_2K, 0x1800),
-                _ => (2, CHR_BANK_SIZE_1K, 0x0000),
-            }
-        };
-
-        let bank_offset = self.chr_bank_offset(register, bank_size);
-        let offset = (addr as usize - base) % bank_size;
-        (bank_offset + offset) % self.chr.len()
+        let slot = ((addr as usize) / CHR_BANK_SIZE_1K).min(7);
+        let base = self.chr_banks[slot] % self.chr.len();
+        let offset = (addr as usize) & (CHR_BANK_SIZE_1K - 1);
+        (base + offset) % self.chr.len()
     }
 
     fn write_bank_select(&mut self, data: u8) {
         self.selected_register = data & 0x07;
         self.prg_mode = data & 0x40 != 0;
         self.chr_inversion = data & 0x80 != 0;
+        self.sync_prg_banks();
+        self.sync_chr_banks();
     }
 
     fn write_bank_data(&mut self, data: u8) {
         let target = (self.selected_register & 0x07) as usize;
         let value = if target <= 1 { data & 0xFE } else { data };
         self.bank_registers[target] = value;
+
+        if target <= 5 {
+            self.sync_chr_banks();
+        } else {
+            self.sync_prg_banks();
+        }
     }
 
     fn update_mirroring(&mut self, data: u8) {
@@ -276,7 +311,6 @@ impl Mapper for Mmc3Mapper {
                 if addr & 1 == 0 {
                     self.irq_enabled = false;
                     self.irq_pending = false;
-                    self.reload_irq_counter();
                 } else {
                     self.irq_enabled = true;
                 }
@@ -379,6 +413,26 @@ mod tests {
         mapper.handle_scanline(false);
         mapper.handle_scanline(true);
         assert!(mapper.poll_irq().is_none());
+        mapper.handle_scanline(true);
+        assert!(mapper.poll_irq().is_some());
+    }
+
+    #[test]
+    fn irq_disable_does_not_reset_counter() {
+        let prg_rom = patterned_prg(2);
+        let chr_rom = vec![0; 0x2000];
+        let mut mapper = Mmc3Mapper::new(prg_rom, chr_rom, Mirroring::Vertical);
+
+        mapper.write_prg(0xC000, 2);
+        mapper.write_prg(0xC001, 0);
+        mapper.write_prg(0xE001, 0);
+
+        mapper.handle_scanline(true); // counter reloads to 2
+        mapper.handle_scanline(true); // counter decrements to 1
+        mapper.write_prg(0xE000, 0);
+        assert!(mapper.poll_irq().is_none());
+
+        mapper.write_prg(0xE001, 0);
         mapper.handle_scanline(true);
         assert!(mapper.poll_irq().is_some());
     }

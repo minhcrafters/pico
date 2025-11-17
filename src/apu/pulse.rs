@@ -10,7 +10,7 @@ const PULSE_DUTY_TABLE: [[u8; 8]; 4] = [
 ];
 
 #[derive(Debug, Clone)]
-pub(super) struct PulseChannel {
+pub struct PulseChannel {
     enabled: bool,
     duty: u8,
     duty_position: usize,
@@ -33,7 +33,7 @@ pub(super) struct PulseChannel {
 }
 
 impl PulseChannel {
-    pub(super) fn new(negate_correction: u16) -> Self {
+    pub fn new(negate_correction: u16) -> Self {
         PulseChannel {
             enabled: false,
             duty: 0,
@@ -57,14 +57,14 @@ impl PulseChannel {
         }
     }
 
-    pub(super) fn set_enabled(&mut self, enabled: bool) {
+    pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         if !enabled {
             self.length_counter = 0;
         }
     }
 
-    pub(super) fn write_register(&mut self, register: usize, value: u8) {
+    pub fn write_register(&mut self, register: usize, value: u8) {
         match register {
             0 => {
                 self.duty = (value >> 6) & 0x03;
@@ -85,7 +85,7 @@ impl PulseChannel {
             }
             3 => {
                 self.timer_period = (self.timer_period & 0x00FF) | (((value & 0x07) as u16) << 8);
-                self.timer_value = self.timer_period;
+                self.reload_timer();
                 self.length_counter = LENGTH_TABLE[(value >> 3) as usize];
                 self.envelope_start = true;
                 self.duty_position = 0;
@@ -94,26 +94,26 @@ impl PulseChannel {
         }
     }
 
-    pub(super) fn clock_timer(&mut self) {
+    pub fn clock_timer(&mut self) {
         if self.timer_period < 8 || self.timer_period > 0x07FF {
             return;
         }
 
-        if self.timer_value == 0 {
-            self.timer_value = self.timer_period;
+        if self.timer_value <= 1 {
+            self.reload_timer();
             self.duty_position = (self.duty_position + 1) & 0x07;
         } else {
             self.timer_value -= 1;
         }
     }
 
-    pub(super) fn clock_quarter_frame(&mut self) {
+    pub fn clock_quarter_frame(&mut self) {
         if self.envelope_start {
             self.envelope_start = false;
             self.envelope_decay_level = 15;
-            self.envelope_divider = self.envelope_period;
+            self.envelope_divider = self.envelope_reload_value();
         } else if self.envelope_divider == 0 {
-            self.envelope_divider = self.envelope_period;
+            self.envelope_divider = self.envelope_reload_value();
             if self.envelope_decay_level == 0 {
                 if self.length_halt {
                     self.envelope_decay_level = 15;
@@ -126,30 +126,35 @@ impl PulseChannel {
         }
     }
 
-    pub(super) fn clock_half_frame(&mut self) {
+    pub fn clock_half_frame(&mut self) {
         if self.length_counter > 0 && !self.length_halt {
             self.length_counter -= 1;
         }
 
+        let mut reload_divider = false;
         if self.sweep_counter == 0 {
-            self.sweep_counter = self.sweep_period;
+            reload_divider = true;
             if self.sweep_enabled && self.sweep_shift > 0 && !self.sweep_mute() {
                 let target = self.sweep_target_period();
                 if target <= 0x07FF {
                     self.timer_period = target;
                 }
             }
-        } else {
-            self.sweep_counter -= 1;
         }
 
         if self.sweep_reload {
-            self.sweep_counter = self.sweep_period;
+            reload_divider = true;
             self.sweep_reload = false;
+        }
+
+        if reload_divider {
+            self.sweep_counter = self.sweep_period;
+        } else if self.sweep_counter > 0 {
+            self.sweep_counter -= 1;
         }
     }
 
-    pub(super) fn output(&self) -> f32 {
+    pub fn output(&self) -> f32 {
         if !self.enabled || self.length_counter == 0 || self.sweep_mute() {
             return 0.0;
         }
@@ -157,13 +162,13 @@ impl PulseChannel {
             return 0.0;
         }
         if self.constant_volume {
-            (self.envelope_period & 0x0F) as f32
+            self.envelope_period as f32
         } else {
             self.envelope_decay_level as f32
         }
     }
 
-    pub(super) fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         self.length_counter > 0
     }
 
@@ -192,6 +197,14 @@ impl PulseChannel {
         }
 
         false
+    }
+
+    fn reload_timer(&mut self) {
+        self.timer_value = self.timer_period.saturating_add(1);
+    }
+
+    fn envelope_reload_value(&self) -> u8 {
+        self.envelope_period.saturating_add(1)
     }
 }
 

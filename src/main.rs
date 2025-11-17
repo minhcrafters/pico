@@ -75,18 +75,22 @@ fn main() {
 
     let audio_buffer: Arc<Mutex<VecDeque<f32>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(96_000)));
+
     let desired_spec = AudioSpecDesired {
         freq: Some(48000),
         channels: Some(1),
         samples: Some(1024),
     };
+
     let audio_buffer_for_device = audio_buffer.clone();
     let audio_device = audio_subsystem
         .open_playback(None, &desired_spec, move |_spec| ApuAudioCallback {
             buffer: audio_buffer_for_device,
         })
         .unwrap();
+
     audio_device.resume();
+
     let sample_rate = audio_device.spec().freq.max(1) as u32;
 
     let mut key_map = HashMap::new();
