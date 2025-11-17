@@ -74,12 +74,12 @@ fn sprite_palette(ppu: &PPU, pallete_idx: u8) -> [u8; 4] {
     ]
 }
 
-fn render_name_table(
+fn render_nametable(
     ppu: &PPU,
     frame: &mut Framebuffer,
     bg_priority: &mut [u8],
-    name_table: &[u8],
-    view_port: Rect,
+    nametable: &[u8],
+    viewport: Rect,
     shift_x: isize,
     shift_y: isize,
     clip_y: (usize, usize),
@@ -88,12 +88,12 @@ fn render_name_table(
         return;
     }
 
-    let attribute_table = &name_table[0x3c0..0x400];
+    let attribute_table = &nametable[0x3c0..0x400];
 
     for i in 0..0x3c0 {
         let tile_column = i % 32;
         let tile_row = i / 32;
-        let tile_idx = name_table[i] as u16;
+        let tile_idx = nametable[i] as u16;
         let mut tile = [0u8; 16];
         for i in 0..16 {
             tile[i] = ppu
@@ -114,10 +114,10 @@ fn render_name_table(
                 let pixel_x = tile_column * 8 + x;
                 let pixel_y = tile_row * 8 + y;
 
-                if pixel_x >= view_port.x1
-                    && pixel_x < view_port.x2
-                    && pixel_y >= view_port.y1
-                    && pixel_y < view_port.y2
+                if pixel_x >= viewport.x1
+                    && pixel_x < viewport.x2
+                    && pixel_y >= viewport.y1
+                    && pixel_y < viewport.y2
                 {
                     let target_x = shift_x + pixel_x as isize;
                     let target_y = shift_y + pixel_y as isize;
@@ -255,11 +255,9 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
     let scroll_segments = ppu.scroll_segments();
     let mut fallback_segment: Option<Vec<ScrollSegment>> = None;
     let segments: &[ScrollSegment] = if scroll_segments.is_empty() {
-        let scroll_x =
-            ((ppu.scroll.coarse_x as usize & 0x1F) * 8 + ppu.scroll.fine_x as usize) % 256;
-        let scroll_y =
-            (((ppu.scroll.coarse_y as usize) % 30) * 8 + ppu.scroll.fine_y as usize) % 240;
-        let base_index = ((ppu.ctrl.nametable_addr() - 0x2000) / 0x400) as usize;
+        let scroll_x = ppu.scroll.scroll_x();
+        let scroll_y = ppu.scroll.scroll_y();
+        let base_index = ppu.scroll.base_nametable();
         fallback_segment = Some(vec![ScrollSegment {
             start_scanline: 0,
             scroll_x,
@@ -298,7 +296,7 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
             let base_shift_y = -(scroll_y as isize);
             let clip = (clip_start, clip_end);
 
-            render_name_table(
+            render_nametable(
                 ppu,
                 frame,
                 &mut bg_priority,
@@ -310,7 +308,7 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
             );
 
             if scroll_x > 0 {
-                render_name_table(
+                render_nametable(
                     ppu,
                     frame,
                     &mut bg_priority,
@@ -323,7 +321,7 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
             }
 
             if scroll_y > 0 {
-                render_name_table(
+                render_nametable(
                     ppu,
                     frame,
                     &mut bg_priority,
@@ -336,7 +334,7 @@ pub fn render(ppu: &PPU, frame: &mut Framebuffer) {
             }
 
             if scroll_x > 0 && scroll_y > 0 {
-                render_name_table(
+                render_nametable(
                     ppu,
                     frame,
                     &mut bg_priority,

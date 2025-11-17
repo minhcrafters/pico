@@ -103,11 +103,9 @@ impl<'a> PPU<'a> {
     }
 
     fn current_scroll_descriptor(&self) -> (usize, usize, usize) {
-        let scroll_x =
-            ((self.scroll.coarse_x as usize & 0x1F) * 8 + self.scroll.fine_x as usize) % 256;
-        let scroll_y =
-            (((self.scroll.coarse_y as usize) % 30) * 8 + self.scroll.fine_y as usize) % 240;
-        let base_nametable = ((self.ctrl.nametable_addr() - 0x2000) / 0x400) as usize;
+        let scroll_x = self.scroll.scroll_x();
+        let scroll_y = self.scroll.scroll_y();
+        let base_nametable = self.scroll.base_nametable();
         (scroll_x, scroll_y, base_nametable)
     }
 
@@ -176,6 +174,7 @@ impl<'a> PPU<'a> {
     pub fn write_to_ctrl(&mut self, value: u8) {
         let before_nmi_status = self.ctrl.generate_vblank_nmi();
         self.ctrl.update(value);
+        self.scroll.update_ctrl(value);
         if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
             self.nmi_interrupt = Some(1);
         }
@@ -216,6 +215,10 @@ impl<'a> PPU<'a> {
 
     pub fn write_to_ppu_addr(&mut self, value: u8) {
         self.addr.update(value);
+        let completed_sequence = self.scroll.write_ppu_addr(value);
+        if completed_sequence {
+            self.queue_scroll_state_change();
+        }
     }
 
     pub fn write_to_data(&mut self, value: u8) {
