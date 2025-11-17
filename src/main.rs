@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{mpsc::channel, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::channel};
 
 use clap::Parser;
 use pico::apu::APU;
@@ -76,7 +76,7 @@ fn main() {
     let audio_buffer: Arc<Mutex<VecDeque<f32>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(96_000)));
     let desired_spec = AudioSpecDesired {
-        freq: Some(44_100),
+        freq: Some(48000),
         channels: Some(1),
         samples: Some(1024),
     };
