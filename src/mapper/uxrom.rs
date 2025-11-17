@@ -1,54 +1,100 @@
 use crate::cart::Mirroring;
 use crate::mapper::Mapper;
 
-pub struct UxRomMapper {
+const PRG_BANK_SIZE: usize = 0x4000;
+
+pub struct UxromMapper {
     prg_rom: Vec<u8>,
-    chr_rom: Vec<u8>,
-    prg_bank: u8,
+    chr: Vec<u8>,
+    chr_is_ram: bool,
+    prg_ram: Vec<u8>,
+    bank_select: u8,
     mirroring: Mirroring,
 }
 
-impl UxRomMapper {
+impl UxromMapper {
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
-        UxRomMapper {
+        let chr_is_ram = chr_rom.is_empty();
+        let chr = if chr_is_ram {
+            vec![0; 0x2000]
+        } else {
+            chr_rom
+        };
+
+        UxromMapper {
             prg_rom,
-            chr_rom,
-            prg_bank: 0,
+            chr,
+            chr_is_ram,
+            prg_ram: vec![0; 0x2000],
+            bank_select: 0,
             mirroring,
         }
     }
+
+    fn prg_bank_count(&self) -> usize {
+        let count = self.prg_rom.len() / PRG_BANK_SIZE;
+        if count == 0 { 1 } else { count }
+    }
+
+    fn prg_bank_offset(&self, bank: usize) -> usize {
+        let count = self.prg_bank_count();
+        (bank % count) * PRG_BANK_SIZE
+    }
 }
 
-impl Mapper for UxRomMapper {
+impl Mapper for UxromMapper {
     fn read_prg(&self, addr: u16) -> u8 {
-        let total_prg_banks = self.prg_rom.len() / 16384;
-
-        if addr >= 0x8000 && addr <= 0xBFFF {
-            // Lower 16KB: switchable bank (first N-1 banks)
-            let bank_addr = (self.prg_bank as usize * 16384) + ((addr - 0x8000) as usize);
-            self.prg_rom[bank_addr]
-        } else if addr >= 0xC000 && addr <= 0xFFFF {
-            // Upper 16KB: fixed to last bank
-            let bank_addr = ((total_prg_banks - 1) * 16384) + ((addr - 0xC000) as usize);
-            self.prg_rom[bank_addr]
-        } else {
-            0
+        match addr {
+            0x6000..=0x7FFF => self.prg_ram[(addr - 0x6000) as usize],
+            0x8000..=0xBFFF => {
+                if self.prg_rom.is_empty() {
+                    0
+                } else {
+                    let offset = self.prg_bank_offset(self.bank_select as usize);
+                    let index = offset + (addr as usize - 0x8000);
+                    self.prg_rom[index % self.prg_rom.len()]
+                }
+            }
+            0xC000..=0xFFFF => {
+                if self.prg_rom.is_empty() {
+                    0
+                } else {
+                    let last_bank = self.prg_bank_count() - 1;
+                    let offset = self.prg_bank_offset(last_bank);
+                    let index = offset + (addr as usize - 0xC000);
+                    self.prg_rom[index % self.prg_rom.len()]
+                }
+            }
+            _ => 0,
         }
     }
 
     fn write_prg(&mut self, addr: u16, data: u8) {
-        // Bank switching at $8000-$FFFF
-        if addr >= 0x8000 && addr <= 0xFFFF {
-            self.prg_bank = data & 0x0F; // Use only the lower 4 bits
+        match addr {
+            0x6000..=0x7FFF => {
+                self.prg_ram[(addr - 0x6000) as usize] = data;
+            }
+            0x8000..=0xFFFF => {
+                let count = self.prg_bank_count() as u8;
+                self.bank_select = if count == 0 { 0 } else { data % count };
+            }
+            _ => {}
         }
     }
 
     fn read_chr(&self, addr: u16) -> u8 {
-        self.chr_rom[addr as usize]
+        if self.chr.is_empty() {
+            0
+        } else {
+            self.chr[addr as usize % self.chr.len()]
+        }
     }
 
-    fn write_chr(&mut self, _addr: u16, _data: u8) {
-        // UxROM CHR is ROM, ignore writes
+    fn write_chr(&mut self, addr: u16, data: u8) {
+        if self.chr_is_ram && !self.chr.is_empty() {
+            let index = addr as usize % self.chr.len();
+            self.chr[index] = data;
+        }
     }
 
     fn mirroring(&self) -> Mirroring {

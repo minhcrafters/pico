@@ -3,15 +3,24 @@ use crate::mapper::Mapper;
 
 pub struct NromMapper {
     prg_rom: Vec<u8>,
-    chr_rom: Vec<u8>,
+    chr: Vec<u8>,
+    chr_is_ram: bool,
     mirroring: Mirroring,
 }
 
 impl NromMapper {
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
+        let chr_is_ram = chr_rom.is_empty();
+        let chr = if chr_is_ram {
+            vec![0; 0x2000]
+        } else {
+            chr_rom
+        };
+
         NromMapper {
             prg_rom,
-            chr_rom,
+            chr,
+            chr_is_ram,
             mirroring,
         }
     }
@@ -41,11 +50,14 @@ impl Mapper for NromMapper {
     }
 
     fn read_chr(&self, addr: u16) -> u8 {
-        self.chr_rom[addr as usize]
+        self.chr[addr as usize % self.chr.len()]
     }
 
-    fn write_chr(&mut self, _addr: u16, _data: u8) {
-        // NROM CHR is ROM, ignore writes
+    fn write_chr(&mut self, addr: u16, data: u8) {
+        if self.chr_is_ram {
+            let index = addr as usize % self.chr.len();
+            self.chr[index] = data;
+        }
     }
 
     fn mirroring(&self) -> Mirroring {

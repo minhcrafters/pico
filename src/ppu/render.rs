@@ -1,8 +1,8 @@
 use crate::{
     cart::Mirroring,
-    framebuffer::Framebuffer,
-    palette,
-    ppu::{ScrollSegment, PPU},
+    ppu::framebuffer::Framebuffer,
+    ppu::palette,
+    ppu::{PPU, ScrollSegment},
 };
 
 struct Rect {
@@ -122,21 +122,21 @@ fn render_name_table(
                     let target_x = shift_x + pixel_x as isize;
                     let target_y = shift_y + pixel_y as isize;
 
-                if target_x < 0
-                    || target_x >= Framebuffer::WIDTH as isize
-                    || target_y < 0
-                    || target_y >= Framebuffer::HEIGHT as isize
-                {
-                    continue;
-                }
+                    if target_x < 0
+                        || target_x >= Framebuffer::WIDTH as isize
+                        || target_y < 0
+                        || target_y >= Framebuffer::HEIGHT as isize
+                    {
+                        continue;
+                    }
 
-                if target_y < clip_y.0 as isize || target_y >= clip_y.1 as isize {
-                    continue;
-                }
+                    if target_y < clip_y.0 as isize || target_y >= clip_y.1 as isize {
+                        continue;
+                    }
 
-                if !ppu.mask.leftmost_8pxl_background() && target_x < 8 {
-                    continue;
-                }
+                    if !ppu.mask.leftmost_8pxl_background() && target_x < 8 {
+                        continue;
+                    }
 
                     let palette_index = match value {
                         0 => ppu.palette_table[0],
@@ -148,11 +148,7 @@ fn render_name_table(
 
                     let rgb = system_palette_color(ppu, palette_index);
 
-                    frame.set_pixel(
-                        target_x as usize,
-                        target_y as usize,
-                        rgb,
-                    );
+                    frame.set_pixel(target_x as usize, target_y as usize, rgb);
                     bg_priority[target_y as usize * Framebuffer::WIDTH + target_x as usize] = value;
                 }
             }
@@ -190,8 +186,7 @@ fn render_sprites(ppu: &PPU, frame: &mut Framebuffer, bg_priority: &[u8]) {
             for half in 0..2 {
                 let addr = bank + (base_tile + half as u16) * 16;
                 for byte in 0..16 {
-                    tile[half * 16 + byte] =
-                        ppu.mapper.read_chr(addr + byte as u16);
+                    tile[half * 16 + byte] = ppu.mapper.read_chr(addr + byte as u16);
                 }
             }
         } else {
@@ -234,8 +229,7 @@ fn render_sprites(ppu: &PPU, frame: &mut Framebuffer, bg_priority: &[u8]) {
                     continue;
                 }
 
-                let buffer_idx =
-                    target_y as usize * Framebuffer::WIDTH + target_x as usize;
+                let buffer_idx = target_y as usize * Framebuffer::WIDTH + target_x as usize;
                 if priority_behind_bg && bg_priority[buffer_idx] != 0 {
                     continue;
                 }

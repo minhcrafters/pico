@@ -1,5 +1,6 @@
-use crate::cpu::{AddressingMode, CPU};
+use crate::cpu::CPU;
 use crate::memory::Memory;
+use crate::opcodes::AddressingMode;
 use crate::opcodes::CPU_OPCODES;
 
 pub fn trace<M: Memory>(cpu: &mut CPU<M>) -> String {

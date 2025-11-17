@@ -5,9 +5,9 @@ use clap::Parser;
 use pico::bus::Bus;
 use pico::cart::Cart;
 use pico::cpu::CPU;
-use pico::framebuffer::Framebuffer;
 use pico::joypad;
 use pico::movie::FM2Movie;
+use pico::ppu::framebuffer::Framebuffer;
 use pico::trace::trace;
 
 use sdl2::event::Event;
@@ -86,7 +86,7 @@ fn main() {
         }
 
         let mut fb = Framebuffer::new();
-        pico::render::render(ppu, &mut fb);
+        pico::ppu::render::render(ppu, &mut fb);
         let _ = frame_tx_clone.send(fb.data);
     });
 
@@ -121,7 +121,9 @@ fn main() {
                 }
                 Event::KeyDown { keycode, .. } => {
                     if let Some(kc) = keycode {
-                        if let Some(btn) = key_map.get(&kc) {
+                        if kc == Keycode::R {
+                            cpu.reset();
+                        } else if let Some(btn) = key_map.get(&kc) {
                             let mut sb = shared_buttons.lock().unwrap();
                             sb.insert(*btn, true);
                         }

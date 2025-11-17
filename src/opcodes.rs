@@ -1,4 +1,3 @@
-use crate::cpu::AddressingMode;
 use core::fmt;
 use std::sync::LazyLock;
 
@@ -66,6 +65,23 @@ impl fmt::Display for Mnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AddressingMode {
+    None,
+    Accumulator,
+    Immediate,
+    ZeroPage,
+    ZeroPageX,
+    ZeroPageY,
+    Relative,
+    Absolute,
+    AbsoluteX,
+    AbsoluteY,
+    Indirect,
+    IndirectX,
+    IndirectY,
 }
 
 #[derive(Debug)]

@@ -3,27 +3,10 @@ use std::fmt::Debug;
 use bitflags::bitflags;
 
 use crate::memory::Memory;
-use crate::opcodes::{CPU_OPCODES, Mnemonic};
+use crate::opcodes::{AddressingMode, CPU_OPCODES, Mnemonic};
 
 pub const STACK_START: u16 = 0x0100;
 pub const PRG_START: u16 = 0x8000;
-
-#[derive(Debug, PartialEq)]
-pub enum AddressingMode {
-    Accumulator,
-    Immediate,
-    ZeroPage,
-    ZeroPageX,
-    ZeroPageY,
-    Relative,
-    Absolute,
-    AbsoluteX,
-    AbsoluteY,
-    Indirect,
-    IndirectX,
-    IndirectY,
-    None,
-}
 
 bitflags! {
     pub struct StatusFlags: u8 {

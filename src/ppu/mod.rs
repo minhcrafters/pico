@@ -1,3 +1,8 @@
+pub mod framebuffer;
+pub mod palette;
+pub mod registers;
+pub mod render;
+
 use crate::cart::Mirroring;
 use crate::mapper::Mapper;
 use registers::addr::AddrRegister;
@@ -5,8 +10,6 @@ use registers::control::ControlRegister;
 use registers::mask::MaskRegister;
 use registers::scroll::ScrollRegister;
 use registers::status::StatusRegister;
-
-pub mod registers;
 
 #[derive(Clone, Debug)]
 pub struct ScrollSegment {
