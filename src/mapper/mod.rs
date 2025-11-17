@@ -10,6 +10,7 @@ pub trait Mapper {
     fn read_chr(&self, addr: u16) -> u8;
     fn write_chr(&mut self, addr: u16, data: u8);
     fn mirroring(&self) -> crate::cart::Mirroring;
+    fn handle_scanline(&mut self, _rendering_enabled: bool) {}
     fn poll_irq(&self) -> Option<u8> {
         None // Default implementation - no IRQ support
     }

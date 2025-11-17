@@ -323,6 +323,10 @@ impl<'a> PPU<'a> {
             }
 
             self.cycles -= 341;
+            if self.scanline < 240 {
+                let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
+                self.mapper.handle_scanline(rendering_enabled);
+            }
             self.scanline += 1;
 
             if self.scanline == 241 {

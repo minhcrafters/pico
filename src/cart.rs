@@ -1,9 +1,5 @@
 use crate::mapper::{
-    Mapper,
-    cnrom::CnromMapper,
-    mmc1::Mmc1Mapper,
-    mmc3::Mmc3Mapper,
-    nrom::NromMapper,
+    Mapper, cnrom::CnromMapper, mmc1::Mmc1Mapper, mmc3::Mmc3Mapper, nrom::NromMapper,
     uxrom::UxromMapper,
 };
 
