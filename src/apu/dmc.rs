@@ -5,6 +5,7 @@ pub const DMC_RATE_TABLE: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54,
 ];
 
+// TODO: This thing sounds kinda off compared to real hardware, needs more investigation.
 pub struct DmcChannel {
     pub debug_disable: bool,
     pub output_buffer: RingBuffer,
