@@ -146,7 +146,6 @@ impl Cart {
             2 => Box::new(UxromMapper::new(prg_rom, chr_rom, screen_mirroring.clone())),
             3 => Box::new(CnromMapper::new(prg_rom, chr_rom, screen_mirroring.clone())),
             4 => Box::new(Mmc3Mapper::new(prg_rom, chr_rom, screen_mirroring.clone())),
-            5 => Box::new(Mmc5Mapper::new(prg_rom, chr_rom, screen_mirroring.clone())),
             31 => Box::new(NsfMapper::new(prg_rom, chr_rom, screen_mirroring.clone())),
             _ => return Err(format!("Mapper {} not supported", mapper)),
         };
