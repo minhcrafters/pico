@@ -88,8 +88,11 @@ impl Bus {
     }
 
     pub fn render_frame(&mut self, framebuffer: &mut Framebuffer) {
-        let mapper = self.cart.mapper.as_mut();
-        render::render(&self.ppu, mapper, framebuffer);
+        {
+            let mapper = self.cart.mapper.as_mut();
+            render::render(&self.ppu, mapper, framebuffer);
+        }
+        self.ppu.reset_scroll_segments_for_new_frame();
     }
 
     pub fn cpu_clock(&mut self) -> bool {
